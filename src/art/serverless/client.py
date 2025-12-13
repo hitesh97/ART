@@ -58,6 +58,7 @@ class ExperimentalTrainingConfig(TypedDict, total=False):
     )
     kimi_k2_tau: float | None
     learning_rate: float | None
+    mask_prob_ratio: bool | None
     max_negative_advantage_importance_sampling_weight: float | None
     ppo: bool | None
     precalculate_logprobs: bool | None

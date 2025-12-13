@@ -75,6 +75,12 @@ def loss_fn(
         prob_ratio = torch.clamp(
             prob_ratio, max=max_negative_advantage_importance_sampling_weight
         )
+    if experimental_config.get("mask_prob_ratio", False):
+        prob_ratio = torch.where(
+            (prob_ratio > 1 - epsilon) & (prob_ratio < 1 + epsilon_high),
+            prob_ratio,
+            0.0,
+        )
     if tau := experimental_config.get("kimi_k2_tau", None):
         advantages -= tau * logprob_diff.detach()
     if experimental_config.get("ppo", True):

@@ -6,12 +6,6 @@ from openai._types import NOT_GIVEN
 from tqdm import auto as tqdm
 
 from art.serverless.client import Client, ExperimentalTrainingConfig
-from art.utils.deployment import (
-    DeploymentResult,
-    Provider,
-    TogetherDeploymentConfig,
-    WandbDeploymentConfig,
-)
 
 from .. import dev
 from ..backend import Backend
@@ -160,6 +154,7 @@ class ServerlessBackend(Backend):
                 importance_sampling_level=dev_config.get("importance_sampling_level"),
                 kimi_k2_tau=dev_config.get("kimi_k2_tau"),
                 learning_rate=config.learning_rate,
+                mask_prob_ratio=dev_config.get("mask_prob_ratio"),
                 max_negative_advantage_importance_sampling_weight=dev_config.get(
                     "max_negative_advantage_importance_sampling_weight"
                 ),

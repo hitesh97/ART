@@ -18,6 +18,7 @@ positive advantages. Defaults to 0.0 (perfectly balanced)."""
     ]
     kimi_k2_tau: float | None
     logprob_calculation_chunk_size: int
+    mask_prob_ratio: bool
     max_negative_advantage_importance_sampling_weight: float
     num_trajectories_learning_rate_multiplier_power: float
     plot_tensors: bool
