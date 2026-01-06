@@ -26,7 +26,7 @@ class TinkerBackend(LocalBackend):
 
     async def _get_service(self, model: TrainableModel) -> ModelService:
         from ..dev.get_model_config import get_model_config
-        from ..dev.model import TinkerArgs
+        from ..dev.model import TinkerArgs, TinkerTrainingClientArgs
         from .service import TinkerService
 
         if model.name not in self._services:
@@ -36,7 +36,10 @@ class TinkerBackend(LocalBackend):
                 config=model._internal_config,
             )
             config["tinker_args"] = config.get("tinker_args") or TinkerArgs(
-                renderer_name=get_renderer_name(model.base_model)
+                renderer_name=get_renderer_name(model.base_model),
+                training_client_args=TinkerTrainingClientArgs(
+                    rank=8,
+                ),
             )
             self._services[model.name] = TinkerService(
                 model_name=model.name,
