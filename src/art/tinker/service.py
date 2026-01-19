@@ -175,20 +175,37 @@ class TinkerService:
             }
         last_checkpoint_dir = self._get_last_checkpoint_dir()
         assert last_checkpoint_dir is not None, "No checkpoint found"
-        state.sampler_client = await self._save_checkpoint(
-            last_checkpoint_dir.with_name(f"{int(last_checkpoint_dir.name) + 1:04d}"),
+        next_step = int(last_checkpoint_dir.name) + 1
+        new_sampler_client = await self._save_checkpoint(
+            last_checkpoint_dir.with_name(f"{next_step:04d}"),
             state.training_client,
         )
+        # Add new sampler client to the dict and update latest step
+        state.sampler_clients[next_step] = new_sampler_client
+        state.latest_step = next_step
 
     async def delete_checkpoints(self, steps_to_keep: list[int]) -> None:
         state = await self._state_task
+        # Find steps to delete
+        steps_to_delete = [
+            int(checkpoint_dir.name)
+            for checkpoint_dir in self._checkpoints_path.iterdir()
+            if int(checkpoint_dir.name) not in steps_to_keep
+        ]
+        # Delete checkpoints from disk and Tinker
         await asyncio.gather(
             *[
-                delete_checkpoint(checkpoint_dir, state.rest_client)
-                for checkpoint_dir in self._checkpoints_path.iterdir()
-                if int(checkpoint_dir.name) not in steps_to_keep
+                delete_checkpoint(
+                    self._checkpoints_path / f"{step:04d}", state.rest_client
+                )
+                for step in steps_to_delete
             ]
         )
+        # Also remove corresponding sampler clients from state
+        for step in steps_to_delete:
+            if step in state.sampler_clients:
+                del state.sampler_clients[step]
+                print(f"Removed sampler client for step {step}")
 
     @cached_property
     def _state_task(self) -> asyncio.Task["TinkerState"]:
@@ -201,6 +218,7 @@ class TinkerService:
         rest_client = service_client.create_rest_client()
         checkpoint_dir = self._get_last_checkpoint_dir()
         if checkpoint_dir:
+            current_step = int(checkpoint_dir.name)
             info = yaml.safe_load(open(checkpoint_dir / "info.yaml", "r"))
             with log_timing("Creating Tinker training client from checkpoint"):
                 training_client = await service_client.create_training_client_from_state_with_optimizer_async(
@@ -212,6 +230,7 @@ class TinkerService:
                     model_path=info["sampler_weights_path"],
                 )
         else:
+            current_step = 0
             with log_timing("Creating Tinker training client"):
                 training_client_args = config.get("training_client_args", {})
                 if "rank" not in training_client_args:
@@ -231,7 +250,8 @@ class TinkerService:
             service_client=service_client,
             rest_client=rest_client,
             training_client=training_client,
-            sampler_client=sampler_client,
+            sampler_clients={current_step: sampler_client},
+            latest_step=current_step,
             renderer=renderers.get_renderer(
                 name=config["renderer_name"],
                 tokenizer=tokenizer_utils.get_tokenizer(self.base_model),
@@ -296,6 +316,15 @@ class TinkerService:
         async def chat_completions(
             request: Request, body: CompletionCreateParams
         ) -> ChatCompletion:
+            # Parse model name to extract optional @step suffix
+            model_name = body.get("model", self.model_name)
+            step: int | None = None
+            if "@" in str(model_name):
+                base_name, step_str = str(model_name).rsplit("@", 1)
+                step = int(step_str)
+
+            sampler_client = state.get_sampler_client(step)
+
             prompt = tinker.ModelInput.from_ints(
                 tokens=state.renderer.tokenizer.apply_chat_template(
                     list(body["messages"]),  # type: ignore
@@ -303,7 +332,7 @@ class TinkerService:
                     add_generation_prompt=True,
                 )
             )
-            sample_response = await state.sampler_client.sample_async(
+            sample_response = await sampler_client.sample_async(
                 prompt=prompt,
                 num_samples=body.get("n") or 1,
                 sampling_params=tinker.SamplingParams(
@@ -417,5 +446,16 @@ class TinkerState:
     service_client: tinker.ServiceClient
     rest_client: TinkerRestClient
     training_client: tinker.TrainingClient
-    sampler_client: tinker.SamplingClient
+    sampler_clients: dict[int, tinker.SamplingClient]
+    latest_step: int
     renderer: renderers.Renderer
+
+    def get_sampler_client(self, step: int | None = None) -> tinker.SamplingClient:
+        if step is None:
+            step = self.latest_step
+        if step not in self.sampler_clients:
+            available = sorted(self.sampler_clients.keys())
+            raise ValueError(
+                f"No sampler client for step {step}. Available steps: {available}"
+            )
+        return self.sampler_clients[step]

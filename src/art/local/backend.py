@@ -484,6 +484,13 @@ class LocalBackend(Backend):
                     f"Advanced step from {current_step} to {next_step} (no training occurred)"
                 )
 
+                # Register the renamed checkpoint as a new LoRA adapter
+                # so it's available for inference at the new step
+                from ..unsloth.service import UnslothService
+
+                if isinstance(service, UnslothService):
+                    await service.register_lora_for_step(next_step, next_checkpoint_dir)
+
             # Log metrics showing no groups were trainable
             self._log_metrics(
                 model,

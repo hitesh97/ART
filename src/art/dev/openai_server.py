@@ -12,15 +12,23 @@ def get_openai_server_config(
     lora_path: str | None = None,
     config: "OpenAIServerConfig | None" = None,
 ) -> "OpenAIServerConfig":
+    import os
+
     if config is None:
         config = OpenAIServerConfig()
     log_file = config.get("log_file", log_file)
+
+    # Extract step from lora_path for multi-checkpoint support
+    # lora_path format is: {output_dir}/checkpoints/{step:04d}
+    lora_name = model_name
+    if lora_path:
+        step = int(os.path.basename(lora_path))
+        lora_name = f"{model_name}@{step}"
+
     server_args = ServerArgs(
         api_key="default",
         lora_modules=(
-            [f'{{"name": "{model_name}", "path": "{lora_path}"}}']
-            if lora_path
-            else None
+            [f'{{"name": "{lora_name}", "path": "{lora_path}"}}'] if lora_path else None
         ),
         return_tokens_as_token_ids=True,
         enable_auto_tool_choice=True,

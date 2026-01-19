@@ -261,6 +261,13 @@ class UnslothService:
     config: dev.InternalModelConfig
     output_dir: str
     _is_sleeping: bool = False
+    _latest_step: int = 0
+    _lora_id_counter: int = 1  # Start from 1 since 0 is reserved
+
+    def _next_lora_id(self) -> int:
+        """Return a new unique LoRA ID to avoid collisions in vLLM."""
+        self._lora_id_counter += 1
+        return self._lora_id_counter
 
     async def start_openai_server(self, config: dev.OpenAIServerConfig | None) -> None:
         lora_path = get_last_checkpoint_dir(self.output_dir)
@@ -269,23 +276,49 @@ class UnslothService:
             lora_path = get_step_checkpoint_dir(self.output_dir, 0)
             os.makedirs(os.path.dirname(lora_path), exist_ok=True)
             self._state.trainer.save_model(lora_path)
+            self._latest_step = 0
+        else:
+            # Extract step from checkpoint path
+            self._latest_step = get_step_from_dir(self.output_dir)
 
         # Offload training model to CPU before vLLM starts to free GPU memory
         self._state.offload_to_cpu()
 
+        server_config = dev.get_openai_server_config(
+            model_name=self.model_name,
+            base_model=self.base_model,
+            log_file=f"{self.output_dir}/logs/vllm.log",
+            lora_path=lora_path,
+            config=config,
+        )
         await openai_server_task(
             engine=await self.llm,
-            config=dev.get_openai_server_config(
-                model_name=self.model_name,
-                base_model=self.base_model,
-                log_file=f"{self.output_dir}/logs/vllm.log",
-                lora_path=lora_path,
-                config=config,
-            ),
+            config=server_config,
         )
 
     async def vllm_engine_is_sleeping(self) -> bool:
         return self._is_sleeping
+
+    async def register_lora_for_step(self, step: int, checkpoint_dir: str) -> None:
+        """Register a LoRA adapter for a specific checkpoint step.
+
+        This is called when training is skipped but the checkpoint is renamed.
+        """
+        llm = await self.llm
+        await llm.pause_generation()
+        added = await llm.add_lora(
+            LoRARequest(
+                lora_name=f"{self.model_name}@{step}",
+                lora_int_id=self._next_lora_id(),
+                lora_path=checkpoint_dir,
+            )
+        )
+        if not added:
+            raise RuntimeError(
+                f"Failed to add LoRA adapter for step {step} at {checkpoint_dir}"
+            )
+        self._latest_step = step
+        await llm.resume_generation()
 
     async def train(
         self,
@@ -371,17 +404,26 @@ class UnslothService:
         await run_on_workers(llm, do_wake_up)
         self._is_sleeping = False
 
-        # Swap out the LoRA adapter with the newly trained checkpoint
-        await llm.remove_lora(1)
-        await llm.add_lora(
+        # Determine the new step from the checkpoint directory
+        # checkpoint_dir format is: {output_dir}/checkpoints/{step:04d}
+        new_step = int(os.path.basename(checkpoint_dir))
+
+        # Add the new LoRA adapter
+        # We keep old LoRAs loaded - vLLM will page them out as needed
+        added = await llm.add_lora(
             LoRARequest(
-                lora_name=self.model_name,
-                lora_int_id=1,
+                lora_name=f"{self.model_name}@{new_step}",
+                lora_int_id=self._next_lora_id(),
                 lora_path=checkpoint_dir,
             )
         )
+        if not added:
+            raise RuntimeError(
+                f"Failed to add LoRA adapter for step {new_step} at {checkpoint_dir}"
+            )
+        self._latest_step = new_step
 
-        # Resume generation after LoRA swap is complete
+        # Resume generation after LoRA add is complete
         await llm.resume_generation()
 
         if verbose:
@@ -461,6 +503,7 @@ class UnslothService:
         engine_args = {
             **self.config.get("engine_args", {}),
             "enable_lora": True,
+            "max_loras": self.config.get("engine_args", {}).get("max_loras", 2),
         }
         # Remove boolean flags that vLLM's argparse doesn't accept as =False
         for key in ["enable_log_requests", "disable_log_requests"]:

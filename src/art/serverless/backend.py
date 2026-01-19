@@ -74,9 +74,22 @@ class ServerlessBackend(Backend):
         assert model.id is not None, "Model ID is required"
         await self._client.models.delete(model_id=model.id)
 
-    def _model_inference_name(self, model: "TrainableModel") -> str:
+    def _model_inference_name(
+        self, model: "TrainableModel", step: int | None = None
+    ) -> str:
+        """Return the inference name for a model checkpoint.
+
+        Args:
+            model: The trainable model.
+            step: If provided, returns name for specific checkpoint using
+                  W&B artifact versioning (e.g., :step5). If None, returns
+                  name for latest checkpoint (default, backwards compatible).
+        """
         assert model.entity is not None, "Model entity is required"
-        return f"wandb-artifact:///{model.entity}/{model.project}/{model.name}"
+        base_name = f"wandb-artifact:///{model.entity}/{model.project}/{model.name}"
+        if step is not None:
+            return f"{base_name}:step{step}"
+        return base_name
 
     async def _get_step(self, model: "Model") -> int:
         if model.trainable:

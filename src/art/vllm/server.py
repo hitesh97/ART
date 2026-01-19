@@ -4,7 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager
 import logging
 import os
-from typing import Any, AsyncIterator, Coroutine
+from typing import Any, AsyncIterator, Coroutine, cast
 
 from openai import AsyncOpenAI
 from uvicorn.config import LOGGING_CONFIG
@@ -15,6 +15,8 @@ from vllm.logging_utils import NewLineFormatter
 from vllm.utils.argparse_utils import FlexibleArgumentParser
 
 from ..dev.openai_server import OpenAIServerConfig
+
+_openai_serving_models: Any | None = None
 
 
 async def openai_server_task(
@@ -44,6 +46,22 @@ async def openai_server_task(
     subclass_chat_completion_request()
     from vllm.entrypoints.openai import api_server
 
+    # Capture the OpenAIServingModels instance so dynamically added LoRAs
+    # are reflected in the model list.
+    from vllm.entrypoints.openai import serving_models
+
+    serving_models_any = cast(Any, serving_models)
+    if not getattr(serving_models_any, "_art_openai_serving_models_patched", False):
+        serving_models_any._art_openai_serving_models_patched = True
+        original_init = serving_models.OpenAIServingModels.__init__
+
+        def _init(self, *args: Any, **kwargs: Any) -> None:
+            original_init(self, *args, **kwargs)
+            global _openai_serving_models
+            _openai_serving_models = self
+
+        serving_models.OpenAIServingModels.__init__ = _init
+
     patch_listen_for_disconnect()
     patch_tool_parser_manager()
     set_vllm_log_file(config.get("log_file", "vllm.log"))
@@ -65,7 +83,10 @@ async def openai_server_task(
                 long_lora_max_len=getattr(lora_request, "long_lora_max_len", None),
                 base_model_name=getattr(lora_request, "base_model_name", None),
             )
-        return await add_lora(lora_request)
+        added = await add_lora(lora_request)
+        if added and _openai_serving_models is not None:
+            _openai_serving_models.lora_requests[lora_request.lora_name] = lora_request
+        return added
 
     engine.add_lora = _add_lora
 

@@ -187,9 +187,15 @@ class Model(
         )
         return self._openai_client
 
-    def litellm_completion_params(self) -> dict:
-        """Return the parameters that should be sent to litellm.completion."""
-        model_name = self.inference_model_name
+    def litellm_completion_params(self, step: int | None = None) -> dict:
+        """Return the parameters that should be sent to litellm.completion.
+
+        Args:
+            step: If provided, returns params for specific checkpoint using
+                  the `name@step` convention. If None, returns params for
+                  latest checkpoint (default, backwards compatible).
+        """
+        model_name = self.get_inference_name(step)
         if self.trainable:
             model_name = f"hosted_vllm/{model_name}"
         return {
@@ -203,13 +209,21 @@ class Model(
     # Inference name helpers
     # ------------------------------------------------------------------
 
-    def get_inference_name(self) -> str:
+    def get_inference_name(self, step: int | None = None) -> str:
         """Return the name that should be sent to the inference endpoint.
 
         If `inference_model_name` is provided we use that, otherwise we fall
         back to the model's own `name`.
+
+        Args:
+            step: If provided, returns name for specific checkpoint using
+                  the `name@step` convention. If None, returns name for
+                  latest checkpoint (default, backwards compatible).
         """
-        return self.inference_model_name or self.name
+        base_name = self.inference_model_name or self.name
+        if step is not None:
+            return f"{base_name}@{step}"
+        return base_name
 
     async def log(
         self,
