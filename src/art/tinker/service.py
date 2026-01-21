@@ -339,7 +339,9 @@ class TinkerService:
                     max_tokens=body.get("max_completion_tokens")
                     or body.get("max_tokens"),
                     seed=body.get("seed"),
-                    temperature=body.get("temperature") or 1.0,
+                    temperature=t
+                    if (t := body.get("temperature")) is not None
+                    else 1.0,
                     top_k=body.get("top_k") or -1,
                     top_p=body.get("top_p") or 1.0,
                 ),
